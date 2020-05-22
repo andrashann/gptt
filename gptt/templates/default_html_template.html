@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Timetable</title>
+  <style>
+    body {
+      font-family: 'Arial Narrow', Arial, sans-serif;
+    }
+
+    span {
+      white-space:nowrap;
+    }
+
+    span.main {
+      text-transform: uppercase;
+      font-weight: bold;       
+    }
+
+    span.before_row, span.after_row {
+      font-size:  0.8em;
+    }
+
+    tr:nth-child(2n){
+      background: #dddddd;
+    } 
+
+    table {
+      border-collapse: collapse;
+    }
+    td {
+      text-align: center;
+      padding: 0 3px;
+    }
+
+
+    </style>
+  
+</head>
+<body>
+  {% set ns = namespace(previous_arrival_stop='&nbsp;', most_legs=0) %}
+  {# find the most number of legs (#transfers+1) - since our table will
+    need to accommodate the route with the most legs, we need to know it
+    upfront #}
+  {% for result in results %}
+    {% if result|length > ns.most_legs %}
+      {% set ns.most_legs = result|length %}
+    {% endif %}
+  {% endfor %}
+
+  <table>
+    {% for steps in results %}
+        <tr>
+            <td>
+                <span class="before_row">&nbsp;</span><br>
+                <span class="main">{{ steps[0].departure_time }}</span><br>
+                <span class="after_row">{{ ((steps[-1].arrival_time_epoch - 
+                                             steps[0].departure_time_epoch)/3600)|int 
+                                        }}:{{'%02d' %
+                                          (((steps[-1].arrival_time_epoch - 
+                                             steps[0].departure_time_epoch) % 3600)/60)|int
+                                        }}</span>
+              </td>
+          {% for step in steps %}
+            <td>
+              <span class="before_row">{{ ns.previous_arrival_stop }}</span><br>
+              <span class="main">{{ step.departure_locality }}</span><br>
+              <span class="after_row">{{ step.departure_stop }}</span>
+            </td>
+            <td>
+              <span class="before_row">{{ step.vehicle_type }} 
+                {% if step.line_short_name %}
+                  {{ step.line_short_name }}
+                {% elif step.line_name %}
+                {{ step.line_name }}
+                {% endif%}
+              </span><br>
+              <span class="main">{{ step.departure_time }} → {{ step.arrival_time }}</span><br>
+              <span class="after_row"> ⇒ {{ step.headsign }}</span>
+            </td>
+            {%- set ns.previous_arrival_stop = step.arrival_stop -%}
+            {%- if loop.last -%}
+              {% for i in range((ns.most_legs - steps|count) * 2)%}
+                <td>
+                  <span class="before_row">&nbsp;</span><br>
+                  <span class="main">~</span><br>
+                  <span class="after_row">&nbsp;</span>
+                </td>
+              {% endfor %}
+              <td>
+                <span class="before_row">{{ step.arrival_stop }}</span><br>
+                <span class="main">{{ step.arrival_locality }}</span><br>
+                <span class="after_row">&nbsp;</span>
+              </td>
+              {%- set ns.previous_arrival_stop = '' -%}
+            {%- endif -%}
+          {%- endfor %}
+          <td>
+              <span class="before_row">&nbsp;</span><br>
+              <span class="main">{{ steps[-1].arrival_time }}</span><br>
+              <span class="after_row">&nbsp;</span>
+            </td>
+        </tr>{% endfor %}
+  </table>
+  
+</body>
+</html>
