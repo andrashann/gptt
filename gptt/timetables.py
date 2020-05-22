@@ -263,8 +263,11 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
             if loc_data['status'] != 'OK':
                 raise GeocodingAPIError(loc_data['status'], loc_data.get('error_message'))
 
+            # Municipality names are stored either in the 'locality' or 'postal_town'
+            # type entries in the address components part of the API response.
+            # We need the long_name for this; we take the first one as a rule of thumb.
             location_name = [x['long_name'] for x in loc_data['results'][0]['address_components'] 
-                                if 'locality' in x['types']][0]
+                                if 'locality' in x['types'] or 'postal_town' in x['types']][0]
             location_lookup[loc] = location_name
         if verbose:
             sys.stderr.write('\n')
