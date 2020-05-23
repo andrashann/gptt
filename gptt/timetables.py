@@ -1,6 +1,7 @@
 import requests
 import json
 import sys
+import logging
 
 from datetime import datetime
 
@@ -10,8 +11,14 @@ default_html_template = pkgutil.get_data(__name__, "templates/default_html_templ
 import jinja2
 
 
-class DirectionsAPIError(RuntimeError):
+class DirectionsAPIGenericError(RuntimeError):
     """An error thrown when the Directions API returns an error.
+    """
+    pass
+
+class DirectionsAPINoTransitDirectionsError(RuntimeError):
+    """An error thrown when the Directions API could not find transit
+    directions (but it would have found driving directions).
     """
     pass
 
@@ -125,7 +132,9 @@ def get_transit_plan_for_timestamp(origin, destination, api_key, unix_timestamp,
          "bf."]] (default: {[]})
 
     Raises:
-        DirectionsAPIError: the Directions API encountered an error.
+        DirectionsAPIGenericError: the Directions API encountered an error.
+        DirectionsAPINoTransitDirectionsError: the Directions API could not
+         find transit directions at the given route at the given time.
 
     Returns:
         list -- a list of dictionaries, each of which contains details of
@@ -145,10 +154,19 @@ def get_transit_plan_for_timestamp(origin, destination, api_key, unix_timestamp,
     r = requests.get(directions_api_url, params=request_data)
     if verbose:
         sys.stderr.write(' .')
+        sys.stderr.flush()
     timetable_data = json.loads(r.text)
 
     if timetable_data['status'] != 'OK':
-        raise DirectionsAPIError(timetable_data['status'], timetable_data.get('error_message'))        
+        # If 'available_travel_modes' is part of the API response, it means 
+        # that we could not get transit directions at the given point in time
+        # at the given route. This list will NOT have TRANSIT in it. If this is
+        # part of the response, transit mode was available and there was some 
+        # other error.
+        if 'TRANSIT' not in timetable_data.get('available_travel_modes', 'TRANSIT'):
+            raise DirectionsAPINoTransitDirectionsError(timetable_data['status'])
+        else:
+            raise DirectionsAPIGenericError(timetable_data['status'], timetable_data.get('error_message',''))
     
     # only one route will be returned (for given dep time)
     # "Generally, only one entry in the routes array is returned
@@ -276,6 +294,14 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
     # a placeholder for results to be filled in:
     full_transit_results = []
 
+    # a counter of failed attempts in a row (sometimes the API says there are 
+    # no transit directions for a route for a given time, we use this to handle
+    # that)
+    failed_attempts = 0
+    # number of times we had such an error separately from each other (i.e.
+    # not while retrying with another time stamp)
+    total_times_error_encountered = 0
+
     # we don't know how many results will there be, so we loop until we 
     # get to the end of the day
     if verbose:
@@ -283,32 +309,67 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
     while True:
         # the departure time we pass to the API should be one second
         # after the previous departure time to get the next option
-        this_departure_time = str(int(this_departure_time) + 1)
+        this_departure_time += 1
+        try:
+            transit_results = \
+                get_transit_plan_for_timestamp(
+                    origin=origin, 
+                    destination=destination, 
+                    api_key=api_key, 
+                    unix_timestamp=this_departure_time, 
+                    language=language,
+                    vehicle_type_names=vehicle_type_names,
+                    station_name_replacements=station_name_replacements,
+                    verbose=verbose
+                )
+            total_api_calls += 1
+            failed_attempts = 0
+        except DirectionsAPINoTransitDirectionsError:
+            # The Directions API sometimes does not return routes for a given
+            # time even though transit routing is available in the location.
+            # Let's try a point in time five minutes later. If a problem is
+            # encountered for the nth time, we try n*5 minutes later, until
+            # a success, at which time n is reset to 0
+            time_delta = 5 * 60 * (failed_attempts + 1)
+            this_departure_time += time_delta
 
-        transit_results = \
-            get_transit_plan_for_timestamp(
-                origin=origin, 
-                destination=destination, 
-                api_key=api_key, 
-                unix_timestamp=this_departure_time, 
-                language=language,
-                vehicle_type_names=vehicle_type_names,
-                station_name_replacements=station_name_replacements,
-                verbose=verbose
-            )
-        total_api_calls += 1
+            if failed_attempts == 0:
+                if verbose:
+                    sys.stderr.write(f' !')
+                    sys.stderr.flush()
+                total_times_error_encountered += 1
 
-        # we will need current the departure time to look for
-        # the next one after it. it is not the same as the unix_timestamp
-        # argument of the function as the departure time will come after
-        # that point in time
-        this_departure_time = transit_results[0]['departure_time_epoch']
+            failed_attempts += 1
+
+            if this_departure_time + 1 > end_of_day:
+                # if we arrived at the end of the day, output the results as
+                # done below
+                pass
+            else:
+                # if there is still some time left, carry on with getting more
+                # data
+                continue
+        else:
+            # We will need current the departure time to look for
+            # the next one after it. It is not the same as the unix_timestamp
+            # argument of the function as the departure time will come after
+            # that point in time. However, we only set this from the data if
+            # there was no exception above (otherwise we increment it manually
+            # in the "except" block).
+            this_departure_time = transit_results[0]['departure_time_epoch']
 
         if this_departure_time + 1 > end_of_day:
             # break the loop if we are on the next day
+            if len(full_transit_results) == 0:
+                raise ValueError('No directions were found.')
+            
             if verbose:
                 sys.stderr.write('\n')
                 sys.stderr.write('Found {0} route suggestions.\n'.format(len(full_transit_results)))
+
+            if total_times_error_encountered:
+                logging.warn(f'The API failed to return a route {total_times_error_encountered} time(s). This is not fatal but it might cause missing results in the final output. You might be able to fix this by providing more specific values (e.g. the name of a station instead of a city) for "from" and "to". However, since this is a quirk of the API, this may not fix the problem.')
+
             break
         full_transit_results.append(transit_results)
 
@@ -334,6 +395,7 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
         for loc in locations:
             if verbose:
                 sys.stderr.write(' .')
+                sys.stderr.flush()
             r = requests.get(reverse_geocode_api_url, params={'latlng': loc, 'key': api_key})
             total_api_calls += 1
             loc_data = json.loads(r.text)
