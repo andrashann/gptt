@@ -151,3 +151,16 @@ Issue submissions and pull requests are welcome. Simple fixes do not require an 
 ## More info
 
 Read more about this project [on my blog](https://hann.io/articles/2020/get-public-transport-timetables).
+
+## Changelog
+
+- 0.1.1:
+    - [bugfix] Fixed a bug when certain localities were not parsed correctly from API response ([#1][i1])
+    - [bugfix] Made the program aware of the local time of the origin of the query to define the day ([#2][i2])
+    - [bugfix] (partial): Better handling of the Routing API not returning transit results. This is not entirely resolved ([#3][i3])
+- 0.1.0:
+    - initial public release
+
+[i1]: https://github.com/andrashann/gptt/issues/1
+[i2]: https://github.com/andrashann/gptt/issues/2
+[i3]: https://github.com/andrashann/gptt/issues/3
