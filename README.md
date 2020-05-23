@@ -55,7 +55,7 @@ Full description of command line options:
   <tr>
     <td>-k</td>
     <td>--api-key</td>
-    <td>Google API key with the Directions and Geocoding API enabled.</td>
+    <td>Google API key with the Directions, Geocoding, and Time Zone API enabled.</td>
   </tr>
   <tr>
     <td colspan="3"><span style="font-weight:normal">Further arguments to customize the timetable:</span></td>

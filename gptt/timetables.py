@@ -2,7 +2,6 @@ import requests
 import json
 import sys
 
-import dateutil.parser as dp
 from datetime import datetime
 
 import pkgutil
@@ -21,15 +20,84 @@ class GeocodingAPIError(RuntimeError):
     """
     pass
 
+class TimeZoneAPIError(RuntimeError):
+    """An error thrown when the Time Zone API returns an error.
+    """
+    pass
+
 class NoEligibleRoutesError(RuntimeError):
     """An error thrown when there are no eligible routes left after filtering
     them by the number of transfers.
     """
     pass
 
-def ts_to_date(ts):
-    '''Turn an unix timestamp into an ISO date'''
-    return datetime.fromtimestamp(int(ts)).isoformat()[:10]
+def get_location_time_offset(location, unix_timestamp, api_key):
+    """Get the time offset from UTC of location at unix_timestamp from Google
+    APIs using the api_key
+
+    Arguments:
+        location {str} -- A place on Earth, whose name will be interpreted by
+         Google
+        unix_timestamp {int} -- Point in time for which the offset should be
+         calculated (important because of DST)
+        api_key {string} -- Google API key with Geocoding and Time Zone API
+         enabled
+
+    Raises:
+        GeocodingAPIError: if the Geocoding API returns an error
+        ValueError: if we could not identify latitude and longitude of the
+         location
+        TimeZoneAPIError: if the Time Zone API returns an error
+
+    Returns:
+        dict -- a dict with two values: 'offset', the calculated offset as an
+         int and 'api_calls', which should be always 2.
+    """
+    count_api_calls = 0
+
+    location_api_result = \
+        requests.get(
+            'https://maps.googleapis.com/maps/api/geocode/json', 
+            params={'address': location, 'key': api_key}
+        ).json()
+    count_api_calls += 1
+    
+    if location_api_result['status'] != 'OK':
+        raise GeocodingAPIError(
+            location_api_result['status'], 
+            location_api_result.get('error_message')
+        ) 
+
+    lat = location_api_result['results'][0]['geometry'].get('location').get('lat')
+    lon = location_api_result['results'][0]['geometry'].get('location').get('lng')
+    if lat is None or lon is None:
+        raise ValueError('Coordinates could not be parsed from API results. The received data was: {0}'.format(location_api_result['results'][0]))
+    
+    time_zone_api_result = \
+        requests.get(
+            'https://maps.googleapis.com/maps/api/timezone/json',
+            params={
+                'location':f'{lat},{lon}',
+                'timestamp': unix_timestamp,
+                'key': api_key
+                }
+        ).json()
+    count_api_calls += 1
+
+    if time_zone_api_result['status'] != 'OK':
+        raise TimeZoneAPIError(
+            time_zone_api_result['status'], 
+            time_zone_api_result.get('error_message')
+        ) 
+    
+    time_offset = \
+        time_zone_api_result.get('dstOffset', 0) +\
+        time_zone_api_result.get('rawOffset', 0)
+
+    return {
+        'offset': time_offset,
+        'api_calls': count_api_calls
+    }
 
 def get_transit_plan_for_timestamp(origin, destination, api_key, unix_timestamp, 
                                    language='en', vehicle_type_names={}, station_name_replacements=[], verbose=False):
@@ -41,8 +109,8 @@ def get_transit_plan_for_timestamp(origin, destination, api_key, unix_timestamp,
         destination {string} -- A string that the Google Transit API
          understands as a location, it will be used as the destination of 
          the route.
-        api_key {string} -- Google API key with Directions and Geocoding 
-         enabled.
+        api_key {string} -- Google API key with Directions, Geocoding, and Time 
+         Zone API enabled.
         unix_timestamp {int or str} -- Timestamp to search from. The first
          result after this point in time will be returned
 
@@ -155,7 +223,8 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
 
     Arguments:
         origin {string} -- Origin; will be passed to 
-         get_transit_plan_for_timestamp()
+         get_transit_plan_for_timestamp(), also used to determine the time zone
+         of the request
         destination {string} -- Destination; will be passed to
          get_transit_plan_for_timestamp()
         api_key {string} -- API key to be used; will be passed to
@@ -190,12 +259,21 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
 
     total_api_calls = 0 #not used for anything right now
 
-    t = '{}T00:00:00.000Z'.format(date)
-    parsed_t = dp.parse(t)
-    
-    # set the departure time to the beginning of the day
-    this_departure_time = parsed_t.strftime('%s')
+    # set the departure time unix timestamp to the beginning of the day
+    utc_time = datetime.strptime(f'{date}T00:00:00.000Z', '%Y-%m-%dT%H:%M:%S.%fZ')
+    start_of_day = int((utc_time - datetime(1970, 1, 1)).total_seconds())
 
+    origin_time_offset_data = get_location_time_offset(origin, start_of_day, api_key)
+    origin_time_offset = origin_time_offset_data['offset']
+    total_api_calls += origin_time_offset_data['api_calls']
+
+    start_of_day -= origin_time_offset # epoch of day start at location
+    end_of_day = start_of_day + 24 * 60 * 60 # epoch of day end at location
+
+    # initialize variable used in loop below
+    this_departure_time = start_of_day
+
+    # a placeholder for results to be filled in:
     full_transit_results = []
 
     # we don't know how many results will there be, so we loop until we 
@@ -226,7 +304,7 @@ def get_transit_plans_for_day(origin, destination, api_key, date,
         # that point in time
         this_departure_time = transit_results[0]['departure_time_epoch']
 
-        if ts_to_date(this_departure_time) != date:
+        if this_departure_time + 1 > end_of_day:
             # break the loop if we are on the next day
             if verbose:
                 sys.stderr.write('\n')

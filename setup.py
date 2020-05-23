@@ -28,7 +28,7 @@ setup(
     ],
     include_package_data = True,
     packages=["gptt"],
-    install_requires=["requests", "python-dateutil", "Jinja2"],
+    install_requires=["requests", "Jinja2"],
     entry_points={
         "console_scripts": [
             "gptt=gptt.__main__:main",
