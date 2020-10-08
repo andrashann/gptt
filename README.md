@@ -114,8 +114,6 @@ Full description of command line options:
 </tbody>
 </table>
 
-Note: options **in bold** must be passed either as command line arguments or in the config file.
-
 #### Using a config file
 
 The following `config.json` adds values for the non-required options and the API key. (DO NOT commit your API key to a version control system!). 
